@@ -1,22 +1,39 @@
 #!/bin/bash
 
+# causes the shell to exit if any subcommand or pipeline returns a non-zero status
 set -e
 
+# This is a multi-instance app, meaning it can be installed several times independently
+# The id of the app as stated in the manifest is available as $YNH_APP_ID
+# The instance number is available as $YNH_APP_INSTANCE_NUMBER (equals "1", "2", ...)
+# The app instance name is available as $YNH_APP_INSTANCE_NAME
+#    - the first time the app is installed, YNH_APP_INSTANCE_NAME = ynhexample
+#    - the second time the app is installed, YNH_APP_INSTANCE_NAME = ynhexample__2
+#    - ynhexample__{N} for the subsequent installations, with N=3,4, ...
+# The app instance name is probably what you are interested the most, since this is
+# guaranteed to be unique. This is a good unique identifier to define installation path,
+# db names, ...
+app=$YNH_APP_INSTANCE_NAME
+
 # Retrieve arguments
-domain=$1
-path=$2
-user=$3
-is_public=$4
-final_path=/var/www/my_webapp
+domain=$YNH_APP_ARG_DOMAIN
+path=$YNH_APP_ARG_PATH
+user=$YNH_APP_ARG_ADMIN
+is_public=$YNH_APP_ARG_IS_PUBLIC
+final_path=/var/www/$app
+
+# Remove trailing slash to path
+path=${path%/}
+#force location to be / or /foo
+location=${path:-/}
 
 # Check domain/path availability
-sudo yunohost app checkurl $domain$path -a my_webapp
-path=${path%/}
+sudo yunohost app checkurl $domain$path -a $app
 
 # Check user
 sudo yunohost user list --json | grep -q "\"username\": \"$user\"" \
   || (echo "User '$user' does not exist" && exit 1)
-sudo yunohost app setting my_webapp allowed_users -v "$user"
+sudo yunohost app setting $app allowed_users -v "$user"
 
 # Update the salt in the admin.php file
 salt=$(dd if=/dev/urandom bs=1 count=200 2> /dev/null | tr -c -d 'A-Za-z0-9' | sed -n 's/\(.\{24\}\).*/\1/p')
@@ -37,29 +54,25 @@ sudo chmod 775 -R $final_path/files
 sudo chown -hR www-data:www-data $final_path/files
 
 # Modify Nginx configuration file and copy it to Nginx conf directory
-if [[ "$path" == "" ]]; then
-  sed -i "s@LOCATIONTOCHANGE@/@g" ../conf/nginx.conf
-else
-  sed -i "s@LOCATIONTOCHANGE@$path@g" ../conf/nginx.conf
-fi
+sed -i "s@LOCATIONTOCHANGE@$location@g" ../conf/nginx.conf
 sed -i "s@PATHTOCHANGE@$path@g" ../conf/nginx.conf
 sed -i "s@ALIASTOCHANGE@$final_path/@g" ../conf/nginx.conf
-sed -i "s@NAMETOCHANGE@my_webapp@g" ../conf/nginx.conf
-sudo cp ../conf/nginx.conf /etc/nginx/conf.d/$domain.d/my_webapp.conf
+sed -i "s@NAMETOCHANGE@$app@g" ../conf/nginx.conf
+sudo cp ../conf/nginx.conf /etc/nginx/conf.d/$domain.d/$app.conf
 
 # Same goes for PHP-FPM configuration
-sed -i "s@NAMETOCHANGE@my_webapp@g" ../conf/php-fpm.conf
-sudo cp ../conf/php-fpm.conf /etc/php5/fpm/pool.d/my_webapp.conf
+sed -i "s@NAMETOCHANGE@$app@g" ../conf/php-fpm.conf
+sudo cp ../conf/php-fpm.conf /etc/php5/fpm/pool.d/$app.conf
 
 # Make app public if necessary
-sudo yunohost app setting my_webapp is_public -v "$is_public"
+sudo yunohost app setting $app is_public -v "$is_public"
 if [ "$is_public" = "Yes" ];
 then
-    sudo yunohost app setting my_webapp unprotected_uris -v "/"
+    sudo yunohost app setting $app unprotected_uris -v "/"
 fi
 
 # Protect the file manager
-sudo yunohost app setting my_webapp protected_uris -v "/admin"
+sudo yunohost app setting $app protected_uris -v "/admin"
 
 # Reload Nginx, php5-fpm and regenerate SSOwat conf
 sudo service nginx reload
